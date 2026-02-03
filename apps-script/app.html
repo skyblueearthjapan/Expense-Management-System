@@ -1,0 +1,812 @@
+<script>
+/**
+ * SkyBlueEarthJapan 経費管理アプリ - フロントエンドJS
+ */
+
+// グローバル状態
+const state = {
+  currentPage: 'home',
+  currentMonth: new Date(),
+  aiEnabled: true,
+  accountTitles: [],
+  vendors: [],
+  transactions: [],
+  subscriptions: [],
+  aiResult: null,
+  editingId: null,
+  editingSubscriptionId: null
+};
+
+// 初期化
+document.addEventListener('DOMContentLoaded', initApp);
+
+async function initApp() {
+  try {
+    showLoading('初期化中...');
+    await loadMasterData();
+    setupEventListeners();
+    navigateTo('home');
+    hideLoading();
+  } catch (error) {
+    console.error('Init error:', error);
+    hideLoading();
+    showToast('初期化に失敗しました');
+  }
+}
+
+async function loadMasterData() {
+  try {
+    const [atResult, vResult] = await Promise.all([
+      callServer('getAccountTitleList'),
+      callServer('getVendorHintList')
+    ]);
+    if (atResult.success) {
+      state.accountTitles = atResult.accountTitles;
+      populateAccountTitleSelects();
+    }
+    if (vResult.success) {
+      state.vendors = vResult.vendors || [];
+      populateVendorDatalist();
+    }
+  } catch (error) {
+    console.error('Load master data error:', error);
+  }
+}
+
+// イベントリスナー
+function setupEventListeners() {
+  // タブ
+  document.querySelectorAll('.tab-item').forEach(tab => {
+    tab.addEventListener('click', () => navigateTo(tab.dataset.page));
+  });
+
+  // AIトグル
+  document.getElementById('aiToggle').addEventListener('change', (e) => {
+    state.aiEnabled = e.target.checked;
+    document.getElementById('aiToggleLabel').textContent = state.aiEnabled ? 'AI ON' : 'AI OFF';
+  });
+
+  // 音声入力
+  document.getElementById('voiceBtn').addEventListener('click', handleVoiceInput);
+  document.getElementById('analyzeBtn').addEventListener('click', handleAnalyze);
+
+  // AI結果
+  document.getElementById('confirmBtn').addEventListener('click', () => showConfirmForm(false));
+  document.getElementById('editBtn').addEventListener('click', () => showConfirmForm(true));
+  document.getElementById('discardBtn').addEventListener('click', discardAIResult);
+
+  // 手入力
+  document.getElementById('manualInputBtn').addEventListener('click', showManualInput);
+  document.getElementById('backBtn').addEventListener('click', hideConfirmForm);
+
+  // フォーム
+  document.getElementById('transactionForm').addEventListener('submit', handleFormSubmit);
+  document.getElementById('amount').addEventListener('input', formatAmountInput);
+
+  // 月ナビ
+  document.getElementById('prevMonth').addEventListener('click', () => changeMonth(-1));
+  document.getElementById('nextMonth').addEventListener('click', () => changeMonth(1));
+
+  // フィルタ
+  document.getElementById('filterType').addEventListener('change', filterTransactions);
+  document.getElementById('filterCategory').addEventListener('change', filterTransactions);
+  document.getElementById('searchInput').addEventListener('input', debounce(filterTransactions, 300));
+
+  // モーダル
+  document.querySelectorAll('.modal-close, .modal-overlay').forEach(el => {
+    el.addEventListener('click', closeModals);
+  });
+  document.getElementById('cancelEdit').addEventListener('click', closeModals);
+  document.getElementById('saveEdit').addEventListener('click', handleEditSave);
+  document.getElementById('cancelDelete').addEventListener('click', closeModals);
+  document.getElementById('confirmDelete').addEventListener('click', handleDeleteConfirm);
+
+  // サブスク
+  document.getElementById('addSubscriptionBtn').addEventListener('click', () => openSubscriptionModal());
+  document.getElementById('cancelSubscription').addEventListener('click', closeModals);
+  document.getElementById('saveSubscription').addEventListener('click', handleSubscriptionSave);
+}
+
+// ナビゲーション
+function navigateTo(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(page + 'Page').classList.add('active');
+  document.querySelectorAll('.tab-item').forEach(t => {
+    t.classList.toggle('active', t.dataset.page === page);
+  });
+
+  if (page === 'history') loadHistoryPage();
+  else if (page === 'subscription') loadSubscriptionPage();
+  else if (page === 'analytics') loadAnalyticsPage();
+}
+
+// 音声入力
+let recognition = null;
+
+function handleVoiceInput() {
+  const voiceBtn = document.getElementById('voiceBtn');
+  const voiceLabel = voiceBtn.querySelector('.voice-label');
+
+  if (recognition && voiceBtn.classList.contains('recording')) {
+    recognition.stop();
+    voiceBtn.classList.remove('recording');
+    voiceLabel.textContent = '話す';
+    return;
+  }
+
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    showToast('音声入力に対応していません');
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.lang = 'ja-JP';
+  recognition.continuous = false;
+  recognition.interimResults = true;
+
+  recognition.onstart = () => {
+    voiceBtn.classList.add('recording');
+    voiceLabel.textContent = '聞き取り中...';
+    document.getElementById('voiceTextArea').classList.remove('hidden');
+  };
+
+  recognition.onresult = (event) => {
+    let transcript = '';
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    document.getElementById('voiceText').value = transcript;
+  };
+
+  recognition.onend = () => {
+    voiceBtn.classList.remove('recording');
+    voiceLabel.textContent = '話す';
+  };
+
+  recognition.onerror = (event) => {
+    console.error('Speech error:', event.error);
+    voiceBtn.classList.remove('recording');
+    voiceLabel.textContent = '話す';
+    if (event.error !== 'no-speech') showToast('音声認識エラー');
+  };
+
+  recognition.start();
+}
+
+// AI解析
+async function handleAnalyze() {
+  const utterance = document.getElementById('voiceText').value.trim();
+  if (!utterance) {
+    showToast('入力がありません');
+    return;
+  }
+
+  showLoading('AI解析中...');
+  try {
+    const result = await callServer('analyzeWithAI', { utterance, inputMode: 'voice' });
+    if (result.success) {
+      state.aiResult = result;
+      displayAIResult(result);
+    } else {
+      showToast(result.error?.message || 'AI解析に失敗しました');
+    }
+  } catch (error) {
+    console.error('Analyze error:', error);
+    showToast('AI解析に失敗しました');
+  }
+  hideLoading();
+}
+
+function displayAIResult(result) {
+  const section = document.getElementById('aiResultSection');
+  const content = document.getElementById('aiResultContent');
+  const questions = document.getElementById('aiQuestions');
+  const fields = result.fields || {};
+  const typeLabel = result.type === 'revenue' ? '売上' : '経費';
+  const suggestions = fields.accountTitleSuggestions || [];
+
+  let html = `
+    <div class="ai-result-item"><span class="ai-result-label">種別</span><span class="ai-result-value">${typeLabel}</span></div>
+    <div class="ai-result-item"><span class="ai-result-label">日付</span><span class="ai-result-value">${fields.date || '（未入力）'}</span></div>
+    <div class="ai-result-item"><span class="ai-result-label">金額</span><span class="ai-result-value">${fields.amount ? '¥' + fields.amount.toLocaleString() : '（未入力）'}</span></div>
+    <div class="ai-result-item"><span class="ai-result-label">取引先</span><span class="ai-result-value">${fields.vendor || '（未入力）'}</span></div>
+    <div class="ai-result-item"><span class="ai-result-label">内容</span><span class="ai-result-value">${fields.description || '（未入力）'}</span></div>
+  `;
+  if (suggestions.length > 0) {
+    html += `<div class="ai-result-item"><span class="ai-result-label">勘定科目候補</span><span class="ai-result-value">${suggestions[0].name}（${Math.round(suggestions[0].confidence * 100)}%）</span></div>`;
+  }
+  html += `<div class="ai-result-item"><span class="ai-result-label">信頼度</span><span class="ai-result-value">${Math.round(result.confidence * 100)}%</span></div>`;
+  content.innerHTML = html;
+
+  if (result.questions && result.questions.length > 0) {
+    let qHtml = '<p class="ai-question-text">確認が必要です：</p><ul>';
+    result.questions.forEach(q => { qHtml += `<li>${q.text}</li>`; });
+    qHtml += '</ul>';
+    questions.innerHTML = qHtml;
+    questions.classList.remove('hidden');
+  } else {
+    questions.classList.add('hidden');
+  }
+  section.classList.remove('hidden');
+}
+
+function discardAIResult() {
+  state.aiResult = null;
+  document.getElementById('aiResultSection').classList.add('hidden');
+  document.getElementById('voiceText').value = '';
+  document.getElementById('voiceTextArea').classList.add('hidden');
+}
+
+// 確認フォーム
+function showConfirmForm(editable) {
+  document.getElementById('confirmSection').classList.remove('hidden');
+  document.getElementById('aiResultSection').classList.add('hidden');
+
+  if (state.aiResult) {
+    const fields = state.aiResult.fields || {};
+    document.querySelector(`input[name="type"][value="${state.aiResult.type}"]`).checked = true;
+    document.getElementById('date').value = fields.date || getTodayDate();
+    document.getElementById('amount').value = fields.amount ? fields.amount.toLocaleString() : '';
+    document.getElementById('vendor').value = fields.vendor || '';
+    document.getElementById('description').value = fields.description || '';
+    const suggestions = fields.accountTitleSuggestions || [];
+    if (suggestions.length > 0) {
+      document.getElementById('accountTitle').value = suggestions[0].name;
+      document.getElementById('accountTitleSuggestion').textContent = `推奨: ${suggestions[0].name}（${suggestions[0].reason}）`;
+    }
+    if (fields.paymentMethod) {
+      const pmRadio = document.querySelector(`input[name="paymentMethod"][value="${fields.paymentMethod}"]`);
+      if (pmRadio) pmRadio.checked = true;
+    }
+  } else {
+    resetForm();
+  }
+}
+
+function showManualInput() {
+  state.aiResult = null;
+  document.getElementById('confirmSection').classList.remove('hidden');
+  resetForm();
+}
+
+function hideConfirmForm() {
+  document.getElementById('confirmSection').classList.add('hidden');
+  if (state.aiResult) document.getElementById('aiResultSection').classList.remove('hidden');
+}
+
+function resetForm() {
+  document.getElementById('transactionForm').reset();
+  document.getElementById('date').value = getTodayDate();
+  document.getElementById('accountTitleSuggestion').textContent = '';
+}
+
+// フォーム送信
+async function handleFormSubmit(e) {
+  e.preventDefault();
+  const form = e.target;
+  const formData = new FormData(form);
+  const data = {
+    type: formData.get('type'),
+    date: formData.get('date'),
+    amount: formData.get('amount').replace(/,/g, ''),
+    vendor: formData.get('vendor'),
+    description: formData.get('description'),
+    account_title: formData.get('accountTitle'),
+    payment_method: formData.get('paymentMethod') || '',
+    memo: formData.get('memo') || '',
+    ai_raw: state.aiResult ? document.getElementById('voiceText').value : '',
+    ai_confidence: state.aiResult ? state.aiResult.confidence : null
+  };
+
+  if (!data.date || !data.amount || !data.description || !data.account_title) {
+    showToast('必須項目を入力してください');
+    return;
+  }
+
+  showLoading('保存中...');
+  try {
+    const result = await callServer('saveTransaction', data);
+    if (result.success) {
+      showToast('登録しました');
+      resetForm();
+      document.getElementById('confirmSection').classList.add('hidden');
+      document.getElementById('voiceText').value = '';
+      document.getElementById('voiceTextArea').classList.add('hidden');
+      state.aiResult = null;
+      setTimeout(() => navigateTo('history'), 500);
+    } else {
+      showToast(result.error?.message || '保存に失敗しました');
+    }
+  } catch (error) {
+    console.error('Save error:', error);
+    showToast('保存に失敗しました');
+  }
+  hideLoading();
+}
+
+// 履歴
+async function loadHistoryPage() {
+  updateMonthDisplay();
+  await loadTransactions();
+  populateFilterCategory();
+}
+
+async function loadTransactions() {
+  showLoading('読み込み中...');
+  try {
+    const month = formatMonth(state.currentMonth);
+    const result = await callServer('getTransactions', { month });
+    if (result.success) {
+      state.transactions = result.items || [];
+      displayTransactions(state.transactions);
+      updateSummary(state.transactions);
+    }
+  } catch (error) {
+    console.error('Load transactions error:', error);
+    showToast('取引の読み込みに失敗しました');
+  }
+  hideLoading();
+}
+
+function displayTransactions(transactions) {
+  const list = document.getElementById('transactionList');
+  const empty = document.getElementById('emptyState');
+
+  if (transactions.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  list.innerHTML = transactions.map(t => {
+    const typeLabel = t.type === 'revenue' ? '売上' : '経費';
+    const amountClass = t.type === 'revenue' ? 'revenue' : 'expense';
+    const amountPrefix = t.type === 'expense' ? '-' : '';
+    const hasReceipt = t.receiptUrl ? '📎' : '';
+
+    return `
+      <div class="transaction-card" data-id="${t.id}">
+        <div class="transaction-header">
+          <span class="transaction-date">${formatDateDisplay(t.date)}</span>
+          <span class="transaction-type ${t.type}">${typeLabel} ${hasReceipt}</span>
+        </div>
+        <div class="transaction-vendor">${t.vendor || '（取引先なし）'}</div>
+        <div class="transaction-description">${t.description}</div>
+        <div class="transaction-footer">
+          <span class="transaction-category">${t.accountTitle}</span>
+          <span class="transaction-amount ${amountClass}">${amountPrefix}¥${Number(t.amount).toLocaleString()}</span>
+        </div>
+        <div class="transaction-actions">
+          <button class="btn btn-secondary" onclick="openEditModal('${t.id}')">編集</button>
+          <button class="btn btn-ghost" onclick="openDeleteModal('${t.id}')">削除</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateSummary(transactions) {
+  let revenue = 0, expense = 0;
+  transactions.forEach(t => {
+    const amount = Number(t.amount) || 0;
+    if (t.type === 'revenue') revenue += amount;
+    else expense += amount;
+  });
+  const profit = revenue - expense;
+
+  document.getElementById('summaryRevenue').textContent = '¥' + revenue.toLocaleString();
+  document.getElementById('summaryExpense').textContent = '¥' + expense.toLocaleString();
+  document.getElementById('summaryProfit').textContent = '¥' + profit.toLocaleString();
+  document.getElementById('summaryProfit').className = 'summary-value ' + (profit >= 0 ? 'profit' : 'expense');
+}
+
+function changeMonth(delta) {
+  state.currentMonth.setMonth(state.currentMonth.getMonth() + delta);
+  updateMonthDisplay();
+  loadTransactions();
+}
+
+function updateMonthDisplay() {
+  const year = state.currentMonth.getFullYear();
+  const month = state.currentMonth.getMonth() + 1;
+  document.getElementById('currentMonth').textContent = `${year}年${month}月`;
+}
+
+function filterTransactions() {
+  const type = document.getElementById('filterType').value;
+  const category = document.getElementById('filterCategory').value;
+  const search = document.getElementById('searchInput').value.toLowerCase();
+
+  let filtered = state.transactions;
+  if (type) filtered = filtered.filter(t => t.type === type);
+  if (category) filtered = filtered.filter(t => t.accountTitle === category);
+  if (search) {
+    filtered = filtered.filter(t =>
+      (t.vendor && t.vendor.toLowerCase().includes(search)) ||
+      (t.description && t.description.toLowerCase().includes(search))
+    );
+  }
+  displayTransactions(filtered);
+}
+
+// 編集モーダル
+function openEditModal(transactionId) {
+  state.editingId = transactionId;
+  const t = state.transactions.find(tr => tr.id === transactionId);
+  if (!t) return;
+
+  const form = document.getElementById('editForm');
+  form.innerHTML = `
+    <div class="form-group">
+      <label class="form-label">種別</label>
+      <div class="segment-control">
+        <input type="radio" name="editType" id="editTypeExpense" value="expense" ${t.type === 'expense' ? 'checked' : ''}>
+        <label for="editTypeExpense">経費</label>
+        <input type="radio" name="editType" id="editTypeRevenue" value="revenue" ${t.type === 'revenue' ? 'checked' : ''}>
+        <label for="editTypeRevenue">売上</label>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">日付</label>
+      <input type="date" name="editDate" class="form-input" value="${t.date}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">金額</label>
+      <input type="text" name="editAmount" class="form-input" value="${Number(t.amount).toLocaleString()}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">取引先</label>
+      <input type="text" name="editVendor" class="form-input" value="${t.vendor || ''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">内容</label>
+      <input type="text" name="editDescription" class="form-input" value="${t.description}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">勘定科目</label>
+      <select name="editAccountTitle" class="form-select">
+        ${state.accountTitles.map(at => `<option value="${at.name}" ${at.name === t.accountTitle ? 'selected' : ''}>${at.name}</option>`).join('')}
+      </select>
+    </div>
+  `;
+  document.getElementById('editModal').classList.remove('hidden');
+}
+
+async function handleEditSave() {
+  const form = document.getElementById('editForm');
+  const formData = new FormData(form);
+  const updates = {
+    type: formData.get('editType'),
+    date: formData.get('editDate'),
+    amount: formData.get('editAmount').replace(/,/g, ''),
+    vendor: formData.get('editVendor'),
+    description: formData.get('editDescription'),
+    account_title: formData.get('editAccountTitle')
+  };
+
+  showLoading('保存中...');
+  try {
+    const result = await callServer('updateTransactionFromClient', { transactionId: state.editingId, updates });
+    if (result.success) {
+      showToast('変更を保存しました');
+      closeModals();
+      loadTransactions();
+    } else {
+      showToast(result.error?.message || '保存に失敗しました');
+    }
+  } catch (error) {
+    console.error('Update error:', error);
+    showToast('保存に失敗しました');
+  }
+  hideLoading();
+}
+
+function openDeleteModal(transactionId) {
+  state.editingId = transactionId;
+  document.getElementById('deleteModal').classList.remove('hidden');
+}
+
+async function handleDeleteConfirm() {
+  showLoading('処理中...');
+  try {
+    const result = await callServer('voidTransactionFromClient', state.editingId);
+    if (result.success) {
+      showToast('取引を無効にしました');
+      closeModals();
+      loadTransactions();
+    } else {
+      showToast(result.error?.message || '処理に失敗しました');
+    }
+  } catch (error) {
+    console.error('Void error:', error);
+    showToast('処理に失敗しました');
+  }
+  hideLoading();
+}
+
+// サブスク
+async function loadSubscriptionPage() {
+  showLoading('読み込み中...');
+  try {
+    const result = await callServer('getSubscriptionList', true);
+    if (result.success) {
+      state.subscriptions = result.subscriptions || [];
+      displaySubscriptions(state.subscriptions);
+      updateSubscriptionSummary(state.subscriptions);
+    }
+  } catch (error) {
+    console.error('Load subscriptions error:', error);
+  }
+  hideLoading();
+}
+
+function displaySubscriptions(subscriptions) {
+  const list = document.getElementById('subscriptionList');
+  const empty = document.getElementById('subscriptionEmpty');
+
+  if (subscriptions.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  list.innerHTML = subscriptions.map(s => `
+    <div class="subscription-card" data-id="${s.id}">
+      <div class="subscription-header">
+        <span class="subscription-title">${s.title}</span>
+        <span class="subscription-amount">¥${Number(s.amount).toLocaleString()}/月</span>
+      </div>
+      <div class="subscription-details">
+        ${s.accountTitle} / ${s.paymentCard || 'カード未設定'}
+      </div>
+      <div class="subscription-actions">
+        <button class="btn btn-secondary" onclick="openSubscriptionModal('${s.id}')">編集</button>
+        <button class="btn btn-ghost" onclick="handleDeactivateSubscription('${s.id}')">停止</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function updateSubscriptionSummary(subscriptions) {
+  const total = subscriptions.reduce((sum, s) => sum + Number(s.amount), 0);
+  document.getElementById('subscriptionTotal').textContent = '¥' + total.toLocaleString();
+  document.getElementById('subscriptionCount').textContent = subscriptions.length + '件';
+}
+
+function openSubscriptionModal(subscriptionId = null) {
+  state.editingSubscriptionId = subscriptionId;
+  const form = document.getElementById('subscriptionForm');
+  const title = document.getElementById('subscriptionModalTitle');
+
+  // 勘定科目セレクト
+  const select = form.querySelector('select[name="account_title"]');
+  select.innerHTML = '<option value="">選択してください</option>' +
+    state.accountTitles.filter(at => at.type === 'expense').map(at => `<option value="${at.name}">${at.name}</option>`).join('');
+
+  if (subscriptionId) {
+    title.textContent = 'サブスクを編集';
+    const s = state.subscriptions.find(sub => sub.id === subscriptionId);
+    if (s) {
+      form.querySelector('input[name="title"]').value = s.title;
+      form.querySelector('input[name="amount"]').value = Number(s.amount).toLocaleString();
+      form.querySelector('input[name="payment_card"]').value = s.paymentCard || '';
+      form.querySelector('select[name="account_title"]').value = s.accountTitle;
+      form.querySelector('input[name="vendor"]').value = s.vendor || '';
+      form.querySelector('input[name="description"]').value = s.description || '';
+    }
+  } else {
+    title.textContent = 'サブスクを追加';
+    form.reset();
+  }
+
+  document.getElementById('subscriptionModal').classList.remove('hidden');
+}
+
+async function handleSubscriptionSave() {
+  const form = document.getElementById('subscriptionForm');
+  const formData = new FormData(form);
+  const data = {
+    title: formData.get('title'),
+    amount: formData.get('amount').replace(/,/g, ''),
+    payment_card: formData.get('payment_card'),
+    account_title: formData.get('account_title'),
+    vendor: formData.get('vendor'),
+    description: formData.get('description')
+  };
+
+  if (!data.title || !data.amount || !data.account_title) {
+    showToast('必須項目を入力してください');
+    return;
+  }
+
+  showLoading('保存中...');
+  try {
+    let result;
+    if (state.editingSubscriptionId) {
+      result = await callServer('updateSubscription', { subscriptionId: state.editingSubscriptionId, updates: data });
+    } else {
+      result = await callServer('createSubscription', { data });
+    }
+    if (result.success) {
+      showToast('保存しました');
+      closeModals();
+      loadSubscriptionPage();
+    } else {
+      showToast(result.error?.message || '保存に失敗しました');
+    }
+  } catch (error) {
+    console.error('Save subscription error:', error);
+    showToast('保存に失敗しました');
+  }
+  hideLoading();
+}
+
+async function handleDeactivateSubscription(subscriptionId) {
+  if (!confirm('このサブスクを停止しますか？次月から計上されません。')) return;
+
+  showLoading('処理中...');
+  try {
+    const result = await callServer('deactivateSubscription', { subscriptionId });
+    if (result.success) {
+      showToast('サブスクを停止しました');
+      loadSubscriptionPage();
+    } else {
+      showToast(result.error?.message || '処理に失敗しました');
+    }
+  } catch (error) {
+    console.error('Deactivate error:', error);
+    showToast('処理に失敗しました');
+  }
+  hideLoading();
+}
+
+// 分析
+async function loadAnalyticsPage() {
+  showLoading('読み込み中...');
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    const [summaryResult, breakdownResult, taxResult] = await Promise.all([
+      callServer('getSummary', year, month),
+      callServer('getBreakdown', year, month),
+      callServer('getTaxEstimate')
+    ]);
+
+    if (summaryResult.success) {
+      document.getElementById('kpiRevenue').textContent = '¥' + (summaryResult.revenue || 0).toLocaleString();
+      document.getElementById('kpiExpense').textContent = '¥' + (summaryResult.expense || 0).toLocaleString();
+      document.getElementById('kpiProfit').textContent = '¥' + (summaryResult.profit || 0).toLocaleString();
+    }
+
+    if (breakdownResult.success) {
+      displayCategoryChart(breakdownResult.breakdown || []);
+    }
+
+    if (taxResult.success) {
+      document.getElementById('annualIncome').textContent = '¥' + (taxResult.annualIncome || 0).toLocaleString();
+      document.getElementById('incomeTax').textContent = '¥' + (taxResult.incomeTax || 0).toLocaleString();
+      document.getElementById('residentTax').textContent = '¥' + (taxResult.residentTax || 0).toLocaleString();
+    }
+  } catch (error) {
+    console.error('Analytics error:', error);
+  }
+  hideLoading();
+}
+
+function displayCategoryChart(breakdown) {
+  const container = document.getElementById('categoryChart');
+  const legend = document.getElementById('categoryLegend');
+
+  if (breakdown.length === 0) {
+    container.innerHTML = '<p class="empty-state">データがありません</p>';
+    legend.innerHTML = '';
+    return;
+  }
+
+  const total = breakdown.reduce((sum, item) => sum + item.amount, 0);
+  const colors = ['#2196F3', '#4CAF50', '#FFC107', '#9C27B0', '#FF5722', '#607D8B', '#00BCD4', '#E91E63'];
+
+  // シンプルな棒グラフ風表示
+  container.innerHTML = breakdown.slice(0, 5).map((item, i) => {
+    const percent = total > 0 ? Math.round(item.amount / total * 100) : 0;
+    const color = colors[i % colors.length];
+    return `
+      <div style="margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;">
+          <span>${item.account_title}</span>
+          <span>¥${item.amount.toLocaleString()} (${percent}%)</span>
+        </div>
+        <div style="height:8px;background:#E0E0E0;border-radius:4px;overflow:hidden;">
+          <div style="height:100%;width:${percent}%;background:${color};"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  legend.innerHTML = '';
+}
+
+// モーダル
+function closeModals() {
+  document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+  state.editingId = null;
+  state.editingSubscriptionId = null;
+}
+
+// ユーティリティ
+function callServer(functionName, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)
+      [functionName](...args);
+  });
+}
+
+function showLoading(text = '読み込み中...') {
+  document.getElementById('loadingText').textContent = text;
+  document.getElementById('loading').classList.remove('hidden');
+}
+
+function hideLoading() {
+  document.getElementById('loading').classList.add('hidden');
+}
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  document.getElementById('toastMessage').textContent = message;
+  toast.classList.remove('hidden');
+  setTimeout(() => toast.classList.add('hidden'), 3000);
+}
+
+function getTodayDate() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function formatMonth(date) {
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+}
+
+function formatDateDisplay(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const days = ['日', '月', '火', '水', '木', '金', '土'];
+  return `${d.getMonth() + 1}/${d.getDate()}（${days[d.getDay()]}）`;
+}
+
+function formatAmountInput(e) {
+  let value = e.target.value.replace(/[^\d]/g, '');
+  if (value) e.target.value = Number(value).toLocaleString();
+}
+
+function populateAccountTitleSelects() {
+  const options = state.accountTitles.map(at => `<option value="${at.name}">${at.name}</option>`).join('');
+  document.getElementById('accountTitle').innerHTML = '<option value="">選択してください</option>' + options;
+  document.getElementById('filterCategory').innerHTML = '<option value="">全科目</option>' + options;
+}
+
+function populateVendorDatalist() {
+  document.getElementById('vendorList').innerHTML = state.vendors.map(v => `<option value="${v.name}">`).join('');
+}
+
+function populateFilterCategory() {
+  const usedCategories = [...new Set(state.transactions.map(t => t.accountTitle))];
+  document.getElementById('filterCategory').innerHTML = '<option value="">全科目</option>' +
+    usedCategories.map(c => `<option value="${c}">${c}</option>`).join('');
+}
+
+function debounce(func, wait) {
+  let timeout;
+  return function(...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
+}
+</script>

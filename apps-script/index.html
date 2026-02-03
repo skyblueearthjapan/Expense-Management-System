@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>SkyBlueEarth経費管理</title>
+  <base target="_top">
+  <?!= include('styles'); ?>
+</head>
+<body>
+  <div id="app">
+    <!-- ヘッダー -->
+    <header class="header">
+      <div class="header-content">
+        <h1 class="header-title">SkyBlueEarth経費管理</h1>
+        <label class="ai-toggle">
+          <input type="checkbox" id="aiToggle" checked>
+          <span class="toggle-label" id="aiToggleLabel">AI ON</span>
+        </label>
+      </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="main-content">
+      <!-- ===== Home画面 ===== -->
+      <div id="homePage" class="page active">
+        <div class="page-header">
+          <h2>取引を登録</h2>
+          <p class="page-subtitle">音声または手入力で経費・売上を記録</p>
+        </div>
+
+        <!-- 音声入力エリア -->
+        <section class="section">
+          <div class="voice-input-area">
+            <button id="voiceBtn" class="voice-btn">
+              <span class="voice-icon">🎤</span>
+              <span class="voice-label">話す</span>
+            </button>
+            <p class="voice-hint">例：「昨日Amazonで事務用品1万2千円買った」</p>
+
+            <div id="voiceTextArea" class="voice-text-area hidden">
+              <textarea id="voiceText" rows="3" placeholder="認識結果（編集可能）"></textarea>
+              <button id="analyzeBtn" class="btn btn-primary btn-block">AI解析</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- AI解析結果 -->
+        <section id="aiResultSection" class="section hidden">
+          <div class="ai-result-card">
+            <h3 class="card-title">AI解析結果</h3>
+            <p class="card-subtitle">内容を確認してください</p>
+
+            <div id="aiQuestions" class="ai-questions hidden"></div>
+
+            <div id="aiResultContent" class="ai-result-content"></div>
+
+            <div class="ai-result-actions">
+              <button id="confirmBtn" class="btn btn-primary">この内容で確定</button>
+              <button id="editBtn" class="btn btn-secondary">編集して確定</button>
+              <button id="discardBtn" class="btn btn-ghost">やり直す</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 確認・編集フォーム -->
+        <section id="confirmSection" class="section hidden">
+          <div class="confirm-card">
+            <div class="form-header">
+              <button id="backBtn" class="btn btn-ghost">← 戻る</button>
+              <h3>取引を確認</h3>
+            </div>
+
+            <form id="transactionForm" class="transaction-form">
+              <!-- 種別 -->
+              <div class="form-group">
+                <label class="form-label">種別 <span class="required">*</span></label>
+                <div class="segment-control">
+                  <input type="radio" name="type" id="typeExpense" value="expense" checked>
+                  <label for="typeExpense">経費</label>
+                  <input type="radio" name="type" id="typeRevenue" value="revenue">
+                  <label for="typeRevenue">売上</label>
+                </div>
+              </div>
+
+              <!-- 日付 -->
+              <div class="form-group">
+                <label class="form-label">日付 <span class="required">*</span></label>
+                <input type="date" id="date" name="date" class="form-input" required>
+              </div>
+
+              <!-- 金額 -->
+              <div class="form-group">
+                <label class="form-label">金額 <span class="required">*</span></label>
+                <div class="input-with-prefix">
+                  <span class="input-prefix">¥</span>
+                  <input type="text" id="amount" name="amount" class="form-input" inputmode="numeric" placeholder="10,000" required>
+                </div>
+              </div>
+
+              <!-- 取引先 -->
+              <div class="form-group">
+                <label class="form-label">取引先</label>
+                <input type="text" id="vendor" name="vendor" class="form-input" list="vendorList" placeholder="例：Amazon">
+                <datalist id="vendorList"></datalist>
+              </div>
+
+              <!-- 内容 -->
+              <div class="form-group">
+                <label class="form-label">内容 <span class="required">*</span></label>
+                <input type="text" id="description" name="description" class="form-input" placeholder="例：事務用品購入" required>
+              </div>
+
+              <!-- 勘定科目 -->
+              <div class="form-group">
+                <label class="form-label">勘定科目 <span class="required">*</span></label>
+                <select id="accountTitle" name="accountTitle" class="form-select" required>
+                  <option value="">選択してください</option>
+                </select>
+                <p id="accountTitleSuggestion" class="suggestion-text"></p>
+              </div>
+
+              <!-- 支払方法 -->
+              <div class="form-group">
+                <label class="form-label">支払方法</label>
+                <div class="segment-control segment-4">
+                  <input type="radio" name="paymentMethod" id="pmCash" value="cash">
+                  <label for="pmCash">現金</label>
+                  <input type="radio" name="paymentMethod" id="pmBank" value="bank">
+                  <label for="pmBank">振込</label>
+                  <input type="radio" name="paymentMethod" id="pmCard" value="card">
+                  <label for="pmCard">カード</label>
+                  <input type="radio" name="paymentMethod" id="pmOther" value="other">
+                  <label for="pmOther">その他</label>
+                </div>
+              </div>
+
+              <!-- メモ -->
+              <div class="form-group">
+                <label class="form-label">メモ</label>
+                <textarea id="memo" name="memo" class="form-textarea" rows="2" placeholder="備考があれば"></textarea>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg btn-block">確定して登録</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <!-- 手入力リンク -->
+        <div class="manual-input-link">
+          <button id="manualInputBtn" class="btn btn-ghost">手入力で登録する</button>
+        </div>
+      </div>
+
+      <!-- ===== 履歴画面 ===== -->
+      <div id="historyPage" class="page">
+        <div class="page-header">
+          <h2>履歴</h2>
+          <p class="page-subtitle">登録した取引の一覧</p>
+        </div>
+
+        <!-- 月選択 -->
+        <div class="month-selector">
+          <button id="prevMonth" class="month-nav">‹</button>
+          <span id="currentMonth" class="month-display">2026年2月</span>
+          <button id="nextMonth" class="month-nav">›</button>
+        </div>
+
+        <!-- サマリー -->
+        <div class="summary-card">
+          <div class="summary-item">
+            <span class="summary-label">売上</span>
+            <span id="summaryRevenue" class="summary-value revenue">¥0</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">経費</span>
+            <span id="summaryExpense" class="summary-value expense">¥0</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">利益</span>
+            <span id="summaryProfit" class="summary-value profit">¥0</span>
+          </div>
+        </div>
+
+        <!-- フィルタ -->
+        <div class="filter-bar">
+          <select id="filterType" class="filter-select">
+            <option value="">すべて</option>
+            <option value="expense">経費</option>
+            <option value="revenue">売上</option>
+          </select>
+          <select id="filterCategory" class="filter-select">
+            <option value="">全科目</option>
+          </select>
+          <input type="text" id="searchInput" class="filter-input" placeholder="検索...">
+        </div>
+
+        <!-- 取引一覧 -->
+        <div id="transactionList" class="transaction-list"></div>
+        <div id="emptyState" class="empty-state hidden">
+          この月の取引はありません
+        </div>
+      </div>
+
+      <!-- ===== サブスク画面 ===== -->
+      <div id="subscriptionPage" class="page">
+        <div class="page-header">
+          <h2>サブスク（固定費）</h2>
+          <p class="page-subtitle">毎月自動で計上される契約</p>
+        </div>
+
+        <!-- 固定費サマリー -->
+        <div class="summary-card subscription-summary">
+          <div class="summary-item">
+            <span class="summary-label">当月の固定費合計</span>
+            <span id="subscriptionTotal" class="summary-value expense">¥0</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">件数</span>
+            <span id="subscriptionCount" class="summary-value">0件</span>
+          </div>
+        </div>
+
+        <!-- サブスク一覧 -->
+        <div id="subscriptionList" class="subscription-list"></div>
+        <div id="subscriptionEmpty" class="empty-state hidden">
+          サブスクが登録されていません
+        </div>
+
+        <!-- 追加ボタン -->
+        <button id="addSubscriptionBtn" class="fab">+</button>
+      </div>
+
+      <!-- ===== 分析画面 ===== -->
+      <div id="analyticsPage" class="page">
+        <div class="page-header">
+          <h2>分析</h2>
+          <p class="page-subtitle">事業の状況を確認</p>
+        </div>
+
+        <!-- 今月サマリー -->
+        <div class="analytics-card">
+          <h3 class="card-title">今月の事業サマリー</h3>
+          <div class="kpi-grid">
+            <div class="kpi-item">
+              <span class="kpi-label">売上</span>
+              <span id="kpiRevenue" class="kpi-value">¥0</span>
+            </div>
+            <div class="kpi-item">
+              <span class="kpi-label">経費</span>
+              <span id="kpiExpense" class="kpi-value">¥0</span>
+            </div>
+            <div class="kpi-item kpi-profit">
+              <span class="kpi-label">利益</span>
+              <span id="kpiProfit" class="kpi-value">¥0</span>
+            </div>
+          </div>
+          <p class="note-text">※ 利益 = 売上 − 経費</p>
+        </div>
+
+        <!-- カテゴリ別内訳 -->
+        <div class="analytics-card">
+          <h3 class="card-title">カテゴリ別 経費</h3>
+          <p class="card-subtitle">経費の内訳（当月）</p>
+          <div id="categoryChart" class="chart-container"></div>
+          <div id="categoryLegend" class="chart-legend"></div>
+        </div>
+
+        <!-- 税金の目安 -->
+        <div class="analytics-card tax-card">
+          <h3 class="card-title">税金の目安</h3>
+          <div class="tax-info">
+            <div class="tax-item">
+              <span class="tax-label">想定年収（年換算）</span>
+              <span id="annualIncome" class="tax-value">¥0</span>
+            </div>
+            <div class="tax-item">
+              <span class="tax-label">概算 所得税</span>
+              <span id="incomeTax" class="tax-value">¥0</span>
+            </div>
+            <div class="tax-item">
+              <span class="tax-label">概算 住民税</span>
+              <span id="residentTax" class="tax-value">¥0</span>
+            </div>
+          </div>
+          <div class="tax-warning">
+            <span class="warning-icon">⚠️</span>
+            <p>あくまで概算です。最終的な税額は会計士・税理士の判断に従ってください。</p>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- タブバー -->
+    <nav class="tab-bar">
+      <button class="tab-item active" data-page="home">
+        <span class="tab-icon">🏠</span>
+        <span class="tab-label">ホーム</span>
+      </button>
+      <button class="tab-item" data-page="history">
+        <span class="tab-icon">📋</span>
+        <span class="tab-label">履歴</span>
+      </button>
+      <button class="tab-item" data-page="subscription">
+        <span class="tab-icon">🔄</span>
+        <span class="tab-label">サブスク</span>
+      </button>
+      <button class="tab-item" data-page="analytics">
+        <span class="tab-icon">📊</span>
+        <span class="tab-label">分析</span>
+      </button>
+    </nav>
+
+    <!-- 編集モーダル -->
+    <div id="editModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>取引を編集</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-subtitle">変更した内容は履歴に記録されます</p>
+          <form id="editForm"></form>
+        </div>
+        <div class="modal-footer">
+          <button id="cancelEdit" class="btn btn-ghost">キャンセル</button>
+          <button id="saveEdit" class="btn btn-primary">変更を保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 削除確認モーダル -->
+    <div id="deleteModal" class="modal modal-small hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>取引を無効にしますか？</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>この操作は取り消せません。無効にした取引は一覧に表示されなくなります。</p>
+        </div>
+        <div class="modal-footer">
+          <button id="cancelDelete" class="btn btn-ghost">キャンセル</button>
+          <button id="confirmDelete" class="btn btn-danger">無効にする</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- サブスク編集モーダル -->
+    <div id="subscriptionModal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="subscriptionModalTitle">サブスクを追加</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <form id="subscriptionForm">
+            <div class="form-group">
+              <label class="form-label">タイトル <span class="required">*</span></label>
+              <input type="text" name="title" class="form-input" placeholder="例：Notion" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">金額（月額） <span class="required">*</span></label>
+              <div class="input-with-prefix">
+                <span class="input-prefix">¥</span>
+                <input type="text" name="amount" class="form-input" inputmode="numeric" placeholder="1,000" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">支払カード</label>
+              <input type="text" name="payment_card" class="form-input" placeholder="例：JCB">
+            </div>
+            <div class="form-group">
+              <label class="form-label">勘定科目 <span class="required">*</span></label>
+              <select name="account_title" class="form-select" required>
+                <option value="">選択してください</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">請求元（取引先）</label>
+              <input type="text" name="vendor" class="form-input" placeholder="例：Notion Labs">
+            </div>
+            <div class="form-group">
+              <label class="form-label">用途メモ</label>
+              <input type="text" name="description" class="form-input" placeholder="例：ドキュメント管理">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button id="cancelSubscription" class="btn btn-ghost">キャンセル</button>
+          <button id="saveSubscription" class="btn btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ローディング -->
+    <div id="loading" class="loading hidden">
+      <div class="loading-spinner"></div>
+      <p id="loadingText">読み込み中...</p>
+    </div>
+
+    <!-- トースト -->
+    <div id="toast" class="toast hidden">
+      <span id="toastMessage"></span>
+    </div>
+  </div>
+
+  <?!= include('app'); ?>
+</body>
+</html>
